@@ -38,7 +38,7 @@ MAX_ACCESS_CODES_PER_IP_PER_DAY = 5
 @router.post("/messages/")
 @limiter.limit("10/minute")  # 例如，每分钟最多10次请求
 async def create_message(message: dict, request: Request, db: Session = Depends(get_db)):
-    ip = request.client.host
+    ip = request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For") or request.client.host
     logger.info(f"收到来自 {ip} 的新消息创建请求")
 
     try:
@@ -79,7 +79,7 @@ async def create_message(message: dict, request: Request, db: Session = Depends(
 @router.get("/messages/")
 @limiter.limit("20/minute")  # 例如，每分钟最多20次请求
 async def get_messages(request: Request, db: Session = Depends(get_db), access_code: str = Query(...)):
-    ip = request.client.host
+    ip = request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For") or request.client.host
     logger.info(f"收到来自 {ip} 的获取所有消息请求，access_code: {access_code}")
     try:
         messages = db.query(Message).filter(Message.access_code == access_code).order_by(Message.created_at.desc()).all()
@@ -100,7 +100,7 @@ async def get_messages(request: Request, db: Session = Depends(get_db), access_c
 @router.post("/upload/")
 @limiter.limit("10/minute")
 async def upload_file(file: UploadFile = File(...), access_code: str = Form(...), db: Session = Depends(get_db), request: Request = None):
-    ip = request.client.host
+    ip = request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For") or request.client.host
     logger.info(f"收到来自 {ip} 的上传文件请求: 原始文件名 = {file.filename}, 访问码 = {access_code}")
 
     # 创建以访问码命名的子文件夹
@@ -165,7 +165,7 @@ async def get_file(
     db: Session = Depends(get_db),
     request: Request = None
 ):
-    ip = request.client.host
+    ip = request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For") or request.client.host
     logger.info(f"收到来自 {ip} 的访问文件请求: {filename}, 访问码: {access_code}")
     
     # 检查文件访问权限
@@ -213,7 +213,7 @@ async def get_file(
 @router.delete("/messages/{message_id}")
 @limiter.limit("5/minute")
 async def delete_message(message_id: int, access_code: str = Query(...), db: Session = Depends(get_db), request: Request = None):
-    ip = request.client.host
+    ip = request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For") or request.client.host
     logger.info(f"收到来自 {ip} 的删除消息请求: 消息ID {message_id}")
     try:
         message = db.query(Message).filter(Message.id == message_id, Message.access_code == access_code).first()

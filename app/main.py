@@ -37,17 +37,18 @@ app.include_router(router)
 # 添加慢速API中间件以记录所有请求的源IP
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    ip = request.client.host
+    # 尝试获取真实的客户端 IP 地址
+    real_ip = request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For") or request.client.host
     method = request.method
     url = request.url.path
-    logger.info(f"Incoming request from {ip}: {method} {url}")
+    logger.info(f"Incoming request from {real_ip}: {method} {url}")
     response = await call_next(request)
     return response
 
-# 定义速率限制超出后的响应
 @app.exception_handler(429)
 async def rate_limit_handler(request: Request, exc):
-    logger.warning(f"Rate limit exceeded for {request.client.host}: {request.method} {request.url.path}")
+    real_ip = request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For") or request.client.host
+    logger.warning(f"Rate limit exceeded for {real_ip}: {request.method} {request.url.path}")
     return JSONResponse(
         status_code=429,
         content={"detail": "Rate limit exceeded. Please try again later."},

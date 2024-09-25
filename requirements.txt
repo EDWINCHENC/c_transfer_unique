@@ -3,3 +3,5 @@ uvicorn
 sqlalchemy
 aiofiles
 python-multipart
+slowapi
+loguru

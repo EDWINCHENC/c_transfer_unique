@@ -1,3 +1,5 @@
+# app/models.py
+
 from sqlalchemy import Column, Integer, String, DateTime
 from .database import Base
 from datetime import datetime, timezone, timedelta
@@ -11,6 +13,7 @@ class Message(Base):
     filename = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone(timedelta(hours=8))))
     access_code = Column(String, index=True)
+    creator_ip = Column(String, index=True)  # 新增字段记录创建者IP
 
     def get_created_at(self):
         return self.created_at

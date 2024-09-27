@@ -4,6 +4,7 @@ import aiofiles
 from fastapi import APIRouter, File, UploadFile, HTTPException, Depends, Request, Query, Form
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from .database import get_db
 from .models import Message, FileAccess
 from datetime import datetime, timezone, timedelta
@@ -31,40 +32,60 @@ if not os.path.exists(UPLOAD_DIR):
 # 设置文件大小限制（100MB）
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
 
-# 定义每日最大 access_code 创建数
-MAX_ACCESS_CODES_PER_IP_PER_DAY = 5
+# 定义每个 IP 最大允许创建的不同 access_code 数量
+MAX_ACCESS_CODES_PER_IP = 5
 
-# API路由：创建新消息
 @router.post("/messages/")
-@limiter.limit("10/minute")  # 例如，每分钟最多10次请求
+@limiter.limit("10/minute")  # 每分钟最多10次请求
 async def create_message(message: dict, request: Request, db: Session = Depends(get_db)):
     ip = request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For") or request.client.host
     logger.info(f"收到来自 {ip} 的新消息创建请求")
 
     try:
-        # 检查今天该IP创建的access_code数量
-        start_of_day = datetime.now(timezone(timedelta(hours=8))).replace(hour=0, minute=0, second=0, microsecond=0)
-        access_code_count = db.query(Message).filter(
-            Message.creator_ip == ip,
-            Message.created_at >= start_of_day
-        ).count()
+        # 检查该 IP 创建的不同 access_code 数量
+        distinct_access_codes = db.query(func.count(func.distinct(Message.access_code))).filter(
+            Message.creator_ip == ip
+        ).scalar()
 
-        if access_code_count >= MAX_ACCESS_CODES_PER_IP_PER_DAY:
-            logger.warning(f"IP {ip} 已达到每日最大创建限制 ({MAX_ACCESS_CODES_PER_IP_PER_DAY})")
+        if distinct_access_codes >= MAX_ACCESS_CODES_PER_IP:
+            logger.warning(f"IP {ip} 已达到最大允许创建的不同 access_code 数量限制 ({MAX_ACCESS_CODES_PER_IP})")
             raise HTTPException(
                 status_code=HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"每日创建 access_code 数量已达上限 ({MAX_ACCESS_CODES_PER_IP_PER_DAY})"
+                detail=f"您已达到可创建的最大 access_code 数量限制 ({MAX_ACCESS_CODES_PER_IP})"
             )
 
-        # 使用中国时间创建消息
-        china_tz = timezone(timedelta(hours=8))
-        china_time = datetime.now(china_tz)
-        db_message = Message(**message, created_at=china_time, creator_ip=ip)
-        db.add(db_message)
-        db.commit()
-        db.refresh(db_message)
+        # 检查是否是新的 access_code
+        existing_access_code = db.query(Message).filter(
+            Message.access_code == message['access_code'],
+            Message.creator_ip == ip
+        ).first()
 
-        logger.info(f"成功创建消息: ID {db_message.id}, 创建时间: {db_message.created_at}, IP: {ip}")
+        if existing_access_code:
+            # 如果 access_code 已存在，直接创建新消息
+            china_tz = timezone(timedelta(hours=8))
+            china_time = datetime.now(china_tz)
+            db_message = Message(**message, created_at=china_time, creator_ip=ip)
+            db.add(db_message)
+            db.commit()
+            db.refresh(db_message)
+            logger.info(f"成功创建消息: ID {db_message.id}, 创建时间: {db_message.created_at}, IP: {ip}, Access Code: {message['access_code']} (已存在)")
+        else:
+            # 如果是新的 access_code，检查是否超过限制
+            if distinct_access_codes < MAX_ACCESS_CODES_PER_IP:
+                china_tz = timezone(timedelta(hours=8))
+                china_time = datetime.now(china_tz)
+                db_message = Message(**message, created_at=china_time, creator_ip=ip)
+                db.add(db_message)
+                db.commit()
+                db.refresh(db_message)
+                logger.info(f"成功创建消息: ID {db_message.id}, 创建时间: {db_message.created_at}, IP: {ip}, Access Code: {message['access_code']} (新)")
+            else:
+                logger.warning(f"IP {ip} 尝试创建新的 access_code，但已达到限制")
+                raise HTTPException(
+                    status_code=HTTP_429_TOO_MANY_REQUESTS,
+                    detail=f"您已达到可创建的最大 access_code 数量限制 ({MAX_ACCESS_CODES_PER_IP})"
+                )
+
         return db_message
 
     except HTTPException as he:
@@ -73,7 +94,6 @@ async def create_message(message: dict, request: Request, db: Session = Depends(
     except Exception as e:
         logger.error(f"创建消息时发生错误: {str(e)}")
         raise HTTPException(status_code=500, detail="服务器内部错误")
-
 
 # API路由：获取所有消息
 @router.get("/messages/")

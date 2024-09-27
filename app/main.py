@@ -1,6 +1,7 @@
 # app/main.py
 import sys, os
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from loguru import logger
@@ -33,6 +34,15 @@ app.add_exception_handler(429, _rate_limit_exceeded_handler)
 
 # 包含路由
 app.include_router(router)
+
+# 添加 CORS 中间件
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://t.cdef.cc", "https://t.lfei.cc"],  # 允许所有源，您可以替换为特定的源
+    allow_credentials=True,
+    allow_methods=["*"],  # 允许所有方法
+    allow_headers=["*"],  # 允许所有头
+)
 
 # 添加慢速API中间件以记录所有请求的源IP
 @app.middleware("http")

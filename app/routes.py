@@ -2,7 +2,8 @@
 
 import aiofiles
 from fastapi import APIRouter, File, UploadFile, HTTPException, Depends, Request, Query, Form
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi import Header
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from .database import get_db
@@ -175,6 +176,83 @@ async def upload_file(file: UploadFile = File(...), access_code: str = Form(...)
             logger.info(f"删除了未完成上传的文件: {file_location}, IP: {ip}")
         raise HTTPException(status_code=500, detail="服务器内部错误")
 
+# 流式获取文件
+@router.get("/stream/{filename}")
+@limiter.limit("60/minute")
+async def stream_video(
+    filename: str,
+    access_code: str = Query(...),
+    range: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+    request: Request = None
+):
+    ip = request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For") or request.client.host
+    logger.info(f"收到来自 {ip} 的视频流式请求: {filename}, 访问码: {access_code}")
+    
+    # 检查文件访问权限
+    file_access = db.query(FileAccess).filter(
+        FileAccess.filename == filename, 
+        FileAccess.access_code == access_code
+    ).first()
+    
+    if not file_access:
+        logger.warning(f"访问被拒绝或文件未找到: {filename}, IP: {ip}")
+        raise HTTPException(status_code=404, detail="文件未找到或访问被拒绝")
+    
+    file_path = os.path.join(UPLOAD_DIR, access_code, filename)
+    
+    if not os.path.exists(file_path):
+        logger.error(f"文件在磁盘上未找到: {filename}, IP: {ip}")
+        raise HTTPException(status_code=404, detail="文件未找到")
+    
+    file_size = os.path.getsize(file_path)
+    mime_type, _ = mimetypes.guess_type(file_path)
+
+    headers = {
+        'Accept-Ranges': 'bytes',
+        'Content-Type': mime_type,
+    }
+
+    if range:
+        try:
+            start, end = range.replace("bytes=", "").split("-")
+            start = int(start)
+            end = int(end) if end else file_size - 1
+        except ValueError:
+            start = 0
+            end = file_size - 1
+
+        # Ensure start and end are within file size
+        start = max(0, start)
+        end = min(file_size - 1, end)
+
+        content_length = end - start + 1
+
+        headers['Content-Range'] = f'bytes {start}-{end}/{file_size}'
+        headers['Content-Length'] = str(content_length)
+        
+        def iterfile():
+            with open(file_path, "rb") as file:
+                file.seek(start)
+                remaining = content_length
+                while remaining:
+                    chunk_size = min(8192, remaining)  # 8KB chunks
+                    data = file.read(chunk_size)
+                    if not data:
+                        break
+                    remaining -= len(data)
+                    yield data
+
+        logger.info(f"开始流式传输视频文件: {filename}, 范围: {start}-{end}, IP: {ip}")
+        return StreamingResponse(
+            iterfile(),
+            status_code=206,
+            headers=headers
+        )
+    else:
+        headers['Content-Length'] = str(file_size)
+        logger.info(f"开始传输整个视频文件: {filename}, 大小: {file_size} bytes, IP: {ip}")
+        return FileResponse(file_path, headers=headers)
 
 # API路由：获取文件
 @router.get("/files/{filename}")

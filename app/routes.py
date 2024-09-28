@@ -176,19 +176,14 @@ async def upload_file(file: UploadFile = File(...), access_code: str = Form(...)
             logger.info(f"删除了未完成上传的文件: {file_location}, IP: {ip}")
         raise HTTPException(status_code=500, detail="服务器内部错误")
 
-# 流式获取文件
+# 为video获取视频文件
 @router.get("/stream/{filename}")
 @limiter.limit("60/minute")
 async def stream_video(
     filename: str,
     access_code: str = Query(...),
-    range: str = Header(None),
     db: Session = Depends(get_db),
-    request: Request = None
-):
-    ip = request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For") or request.client.host
-    logger.info(f"收到来自 {ip} 的视频流式请求: {filename}, 访问码: {access_code}")
-    
+):    
     # 检查文件访问权限
     file_access = db.query(FileAccess).filter(
         FileAccess.filename == filename, 
@@ -204,42 +199,10 @@ async def stream_video(
         raise HTTPException(status_code=404, detail="文件未找到")
     
     file_size = os.path.getsize(file_path)
-    mime_type, _ = mimetypes.guess_type(file_path)
+    logger.info(f"准备发送文件<video>元素: {filename}, 大小: {file_size} bytes")
+    
+    return FileResponse(file_path)
 
-    headers = {
-        "Content-Type": mime_type,
-        "Accept-Ranges": "bytes",
-        "Content-Encoding": "identity",
-        "Content-Length": str(file_size),
-        "Access-Control-Allow-Origin": "*"
-    }
-
-    start = 0
-    end = file_size - 1
-
-    if range:
-        start, end = range.replace("bytes=", "").split("-")
-        start = int(start)
-        end = int(end) if end else file_size - 1
-
-    chunk_size = end - start + 1
-
-    def iterfile(start, chunk_size):
-        with open(file_path, "rb") as f:
-            f.seek(start)
-            data = f.read(chunk_size)
-            yield data
-
-    return StreamingResponse(
-        iterfile(start, chunk_size), 
-        status_code=206 if range else 200,
-        headers={
-            **headers,
-            "Content-Range": f"bytes {start}-{end}/{file_size}",
-            "Content-Length": str(chunk_size),
-        },
-        media_type=mime_type
-    )
 
 # API路由：获取文件
 @router.get("/files/{filename}")

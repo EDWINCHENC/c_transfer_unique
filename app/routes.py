@@ -183,7 +183,11 @@ async def stream_video(
     filename: str,
     access_code: str = Query(...),
     db: Session = Depends(get_db),
+    request: Request = None,  # 添加这行
 ):    
+    ip = request.headers.get("CF-Connecting-IP") or request.headers.get("X-Forwarded-For") or request.client.host
+    logger.info(f"收到来自 {ip} 的访问文件请求: {filename}, 访问码: {access_code}")
+    
     # 检查文件访问权限
     file_access = db.query(FileAccess).filter(
         FileAccess.filename == filename, 

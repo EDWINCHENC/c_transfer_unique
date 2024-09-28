@@ -182,7 +182,7 @@ async def upload_file(file: UploadFile = File(...), access_code: str = Form(...)
 async def stream_video(
     filename: str,
     access_code: str = Query(...),
-    range: Optional[str] = Header(None),
+    range: str = Header(None),
     db: Session = Depends(get_db),
     request: Request = None
 ):
@@ -196,63 +196,50 @@ async def stream_video(
     ).first()
     
     if not file_access:
-        logger.warning(f"访问被拒绝或文件未找到: {filename}, IP: {ip}")
         raise HTTPException(status_code=404, detail="文件未找到或访问被拒绝")
     
     file_path = os.path.join(UPLOAD_DIR, access_code, filename)
     
     if not os.path.exists(file_path):
-        logger.error(f"文件在磁盘上未找到: {filename}, IP: {ip}")
         raise HTTPException(status_code=404, detail="文件未找到")
     
     file_size = os.path.getsize(file_path)
     mime_type, _ = mimetypes.guess_type(file_path)
 
     headers = {
-        'Accept-Ranges': 'bytes',
-        'Content-Type': mime_type,
+        "Content-Type": mime_type,
+        "Accept-Ranges": "bytes",
+        "Content-Encoding": "identity",
+        "Content-Length": str(file_size),
+        "Access-Control-Allow-Origin": "*"
     }
 
+    start = 0
+    end = file_size - 1
+
     if range:
-        try:
-            start, end = range.replace("bytes=", "").split("-")
-            start = int(start)
-            end = int(end) if end else file_size - 1
-        except ValueError:
-            start = 0
-            end = file_size - 1
+        start, end = range.replace("bytes=", "").split("-")
+        start = int(start)
+        end = int(end) if end else file_size - 1
 
-        # Ensure start and end are within file size
-        start = max(0, start)
-        end = min(file_size - 1, end)
+    chunk_size = end - start + 1
 
-        content_length = end - start + 1
+    def iterfile(start, chunk_size):
+        with open(file_path, "rb") as f:
+            f.seek(start)
+            data = f.read(chunk_size)
+            yield data
 
-        headers['Content-Range'] = f'bytes {start}-{end}/{file_size}'
-        headers['Content-Length'] = str(content_length)
-        
-        def iterfile():
-            with open(file_path, "rb") as file:
-                file.seek(start)
-                remaining = content_length
-                while remaining:
-                    chunk_size = min(8192, remaining)  # 8KB chunks
-                    data = file.read(chunk_size)
-                    if not data:
-                        break
-                    remaining -= len(data)
-                    yield data
-
-        logger.info(f"开始流式传输视频文件: {filename}, 范围: {start}-{end}, IP: {ip}")
-        return StreamingResponse(
-            iterfile(),
-            status_code=206,
-            headers=headers
-        )
-    else:
-        headers['Content-Length'] = str(file_size)
-        logger.info(f"开始传输整个视频文件: {filename}, 大小: {file_size} bytes, IP: {ip}")
-        return FileResponse(file_path, headers=headers)
+    return StreamingResponse(
+        iterfile(start, chunk_size), 
+        status_code=206 if range else 200,
+        headers={
+            **headers,
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Content-Length": str(chunk_size),
+        },
+        media_type=mime_type
+    )
 
 # API路由：获取文件
 @router.get("/files/{filename}")
